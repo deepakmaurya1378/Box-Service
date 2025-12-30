@@ -43,54 +43,37 @@ public class AutoOrderServiceImpl implements AutoOrderService {
 
     @Override
     @Transactional
-    public void createAutoOrder(
-            User user,
-            Vendor vendor,
-            ShiftType shiftType,
-            LocalDate orderDate,
-            LocalDateTime scheduledAt
-    ) {
+    public void createAutoOrder(User user, Vendor vendor, ShiftType shiftType, LocalDate orderDate, LocalDateTime scheduledAt) {
 
-        // ===================== 1️⃣ Vendor Unavailability =====================
+        if (vendor.getStatus() != VendorStatus.APPROVED) {
+            log.info("Auto order skipped: vendor {} not approved (status={})", vendor.getId(), vendor.getStatus());
+            return;
+        }
+
+        if (!Boolean.TRUE.equals(vendor.getIsOpen())) {
+            log.info("Auto order skipped: vendor {} is CLOSED for {}", vendor.getId(), shiftType);
+            return;
+        }
+
         if (vendorUnavailabilityService.isVendorUnavailable(vendor.getId(), orderDate)) {
-            log.info(
-                    "Auto order skipped: vendor {} unavailable on {}",
-                    vendor.getId(), orderDate
-            );
+            log.info("Auto order skipped: vendor {} unavailable on {}", vendor.getId(), orderDate);
             return;
         }
 
-        // ===================== 2️⃣ Prevent duplicate AUTO =====================
-        if (orderRepo.existsByUser_IdAndOrderDateAndShiftTypeAndOrderType(
-                user.getId(), orderDate, shiftType, OrderType.AUTO
-        )) {
+        if (orderRepo.existsByUser_IdAndOrderDateAndShiftTypeAndOrderType(user.getId(), orderDate, shiftType, OrderType.AUTO)) {
             return;
         }
 
-        // ===================== 3️⃣ Prevent AUTO if MANUAL exists =====================
-        if (orderRepo.existsByUser_IdAndOrderDateAndShiftTypeAndOrderType(
-                user.getId(), orderDate, shiftType, OrderType.MANUAL
-        )) {
-            return;
-        }
-
-        // ===================== 4️⃣ SHIFT-WISE ADDRESS =====================
+        if (orderRepo.existsByUser_IdAndOrderDateAndShiftTypeAndOrderType(user.getId(), orderDate, shiftType, OrderType.MANUAL)) {return;}
         Address address = addressRepo
-                .findByUser_IdAndAddressType(
-                        user.getId(),
-                        AddressType.valueOf(shiftType.name())
-                )
+                .findByUser_IdAndAddressType(user.getId(), AddressType.valueOf(shiftType.name()))
                 .orElse(null);
 
         if (address == null) {
-            log.warn(
-                    "Auto order skipped: no {} address for user {}",
-                    shiftType, user.getId()
-            );
+            log.warn("Auto order skipped: no {} address for user {}", shiftType, user.getId());
             return;
         }
 
-        // ===================== 5️⃣ DISTANCE CHECK =====================
         double distanceKm = GeoUtils.distanceKm(
                 address.getLatitude().doubleValue(),
                 address.getLongitude().doubleValue(),
@@ -101,50 +84,31 @@ public class AutoOrderServiceImpl implements AutoOrderService {
         if (BigDecimal.valueOf(distanceKm)
                 .compareTo(vendor.getDeliveryRadiusKm()) > 0) {
 
-            log.warn(
-                    "Auto order skipped: vendor {} cannot deliver to {} address ({} km)",
-                    vendor.getId(), shiftType, distanceKm
-            );
+            log.warn("Auto order skipped: vendor {} cannot deliver to {} address ({} km)", vendor.getId(), shiftType, distanceKm);
             return;
         }
 
-        // ===================== 6️⃣ MENU SELECTION =====================
         MealType mealType = mapShiftToMeal(shiftType);
 
-        DayOfWeek dayOfWeek =
-                DayOfWeek.valueOf(orderDate.getDayOfWeek().name());
+        DayOfWeek dayOfWeek = DayOfWeek.valueOf(orderDate.getDayOfWeek().name());
 
-        VendorMenu menu = findMenuForAutoOrder(
-                vendor.getId(),
-                mealType,
-                dayOfWeek
-        );
+        VendorMenu menu = findMenuForAutoOrder(vendor.getId(), mealType, dayOfWeek);
 
         if (menu == null) {
-            log.info(
-                    "Auto order skipped: no menu for vendor {}, meal {}, day {}",
-                    vendor.getId(), mealType, dayOfWeek
-            );
+            log.info("Auto order skipped: no menu for vendor {}, meal {}, day {}", vendor.getId(), mealType, dayOfWeek);
             return;
         }
 
-        // ===================== 7️⃣ WALLET CHECK =====================
         Wallet wallet = walletRepo.findByUserId(user.getId())
-                .orElseThrow(() ->
-                        new RuntimeException("Wallet not found for user " + user.getId())
-                );
+                .orElseThrow(() -> new RuntimeException("Wallet not found for user " + user.getId()));
 
         BigDecimal amount = menu.getPrice();
 
         if (wallet.getBalance().compareTo(amount) < 0) {
-            log.info(
-                    "Auto order skipped: insufficient wallet balance for user {}",
-                    user.getId()
-            );
+            log.info("Auto order skipped: insufficient wallet balance for user {}", user.getId());
             return;
         }
 
-        // ===================== 8️⃣ CREATE ORDER =====================
         Order order = orderRepo.save(
                 Order.builder()
                         .user(user)

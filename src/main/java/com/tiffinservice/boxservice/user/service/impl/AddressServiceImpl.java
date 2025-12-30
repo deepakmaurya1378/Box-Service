@@ -46,7 +46,8 @@ public class AddressServiceImpl implements AddressService {
 
         User user = userRepository.findById(dto.getUserId())
                 .orElseThrow(() ->
-                        new ResourceNotFoundException("User not found"));
+                        new ResourceNotFoundException("User", "id", dto.getUserId())
+                );
 
         Address address = addressMapper.toEntity(dto, user);
         return addressMapper.toDto(addressRepository.save(address));
@@ -54,17 +55,22 @@ public class AddressServiceImpl implements AddressService {
 
     @Override
     public AddressResponseDTO getAddressById(Long id) {
+
         Address address = addressRepository.findById(id)
                 .orElseThrow(() ->
-                        new ResourceNotFoundException("Address not found"));
+                        new ResourceNotFoundException("Address", "id", id)
+                );
+
         return addressMapper.toDto(address);
     }
 
     @Override
     public List<AddressResponseDTO> getAddressesByUserId(Long userId) {
+
         User user = userRepository.findById(userId)
                 .orElseThrow(() ->
-                        new ResourceNotFoundException("User not found"));
+                        new ResourceNotFoundException("User", "id", userId)
+                );
 
         return addressRepository.findByUser(user)
                 .stream()
@@ -74,9 +80,11 @@ public class AddressServiceImpl implements AddressService {
 
     @Override
     public AddressResponseDTO updateAddress(Long id, AddressRequestDTO dto) {
+
         Address address = addressRepository.findById(id)
                 .orElseThrow(() ->
-                        new ResourceNotFoundException("Address not found"));
+                        new ResourceNotFoundException("Address", "id", id)
+                );
 
         if (dto.getAddressLine1() != null) address.setAddressLine1(dto.getAddressLine1());
         if (dto.getAddressLine2() != null) address.setAddressLine2(dto.getAddressLine2());
@@ -96,26 +104,34 @@ public class AddressServiceImpl implements AddressService {
 
         Address address = addressRepository.findById(id)
                 .orElseThrow(() ->
-                        new ResourceNotFoundException("Address not found"));
+                        new ResourceNotFoundException("Address", "id", id)
+                );
 
-        ShiftType shiftType =
-                ShiftType.valueOf(address.getAddressType().name());
+        ShiftType shiftType = mapAddressTypeToShift(address.getAddressType());
 
         boolean defaultVendorExists =
-                preferenceRepository
-                        .existsByUserIdAndShiftTypeAndPreferenceType(
-                                address.getUser().getId(),
-                                shiftType,
-                                PreferenceType.DEFAULT
-                        );
+                preferenceRepository.existsByUserIdAndShiftTypeAndPreferenceType(
+                        address.getUser().getId(),
+                        shiftType,
+                        PreferenceType.DEFAULT
+                );
 
         if (defaultVendorExists) {
             throw new BadRequestException(
-                    "Default vendor exists for " + shiftType +
-                            ".First remove all the prefered vendor for" + shiftType +". Then delete this."
+                    "A default vendor exists for " + shiftType +
+                            ". Please remove all preferred vendors for this shift before deleting the address."
             );
         }
 
         addressRepository.delete(address);
+    }
+
+    private ShiftType mapAddressTypeToShift(AddressType addressType) {
+
+        return switch (addressType) {
+            case BREAKFAST -> ShiftType.BREAKFAST;
+            case LUNCH -> ShiftType.LUNCH;
+            case DINNER -> ShiftType.DINNER;
+        };
     }
 }

@@ -66,6 +66,9 @@ public class Vendor {
     @Column(nullable = false, length = 60)
     private String city;
 
+    @Column(nullable = false)
+    private Boolean isOpen = false;
+
     @Column(nullable = false, length = 60)
     private String state;
 

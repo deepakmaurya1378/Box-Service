@@ -8,6 +8,9 @@ import com.tiffinservice.boxservice.common.exception.BadRequestException;
 import com.tiffinservice.boxservice.common.exception.ConflictException;
 import com.tiffinservice.boxservice.common.exception.ResourceNotFoundException;
 import com.tiffinservice.boxservice.common.utils.GeoUtils;
+import com.tiffinservice.boxservice.order.dto.OrderResponseDTO;
+import com.tiffinservice.boxservice.order.mapper.OrderMapper;
+import com.tiffinservice.boxservice.order.repository.OrderRepository;
 import com.tiffinservice.boxservice.user.entity.Address;
 import com.tiffinservice.boxservice.user.repository.AddressRepository;
 import com.tiffinservice.boxservice.vendor.dto.NearbyVendorResponseDTO;
@@ -18,11 +21,17 @@ import com.tiffinservice.boxservice.vendor.entity.Vendor;
 import com.tiffinservice.boxservice.vendor.mapper.VendorMapper;
 import com.tiffinservice.boxservice.vendor.repository.VendorRepository;
 import com.tiffinservice.boxservice.vendor.service.VendorService;
+import com.tiffinservice.boxservice.common.enums.OrderType;
+import com.tiffinservice.boxservice.common.enums.ShiftType;
+import com.tiffinservice.boxservice.order.mapper.OrderMapper;
+import com.tiffinservice.boxservice.vendor.dto.VendorTodayOrderSummaryDTO;
+
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -35,6 +44,7 @@ public class VendorServiceImpl implements VendorService {
     private final VendorMapper vendorMapper;
     private final AddressRepository addressRepository;
     private final PasswordEncoder passwordEncoder;
+    private final OrderRepository orderRepository;
 
     @Override
     public VendorResponseDTO RegisterVendor(VendorRequestDTO dto) {
@@ -253,4 +263,79 @@ public class VendorServiceImpl implements VendorService {
                 })
                 .collect(Collectors.toList());
     }
+
+
+    public void toggleVendor(Long vendorId, Boolean isOpen) {
+        Vendor vendor = vendorRepository.findById(vendorId)
+                .orElseThrow(() -> new ResourceNotFoundException("Vendor", "id", vendorId)
+                );
+
+        if (vendor.getStatus() != VendorStatus.APPROVED) {
+            throw new ConflictException("Only approved vendors can change availability");
+        }
+        vendor.setIsOpen(isOpen);
+        vendorRepository.save(vendor);
+    }
+
+    @Override
+    public List<OrderResponseDTO> getTodayOrders(Long vendorId) {
+
+        LocalDate today = LocalDate.now();
+
+        return orderRepository
+                .findByVendor_IdAndOrderDate(vendorId, today)
+                .stream()
+                .map(OrderMapper::toResponse)
+                .toList();
+    }
+
+    @Override
+    public VendorTodayOrderSummaryDTO getTodayOrderSummary(Long vendorId) {
+
+        LocalDate today = LocalDate.now();
+
+        long breakfastCount =
+                orderRepository.countByVendor_IdAndOrderDateAndShiftType(
+                        vendorId, today, ShiftType.BREAKFAST);
+
+        long lunchCount =
+                orderRepository.countByVendor_IdAndOrderDateAndShiftType(
+                        vendorId, today, ShiftType.LUNCH);
+
+        long dinnerCount =
+                orderRepository.countByVendor_IdAndOrderDateAndShiftType(
+                        vendorId, today, ShiftType.DINNER);
+
+        long manualCount =
+                orderRepository.countByVendor_IdAndOrderDateAndOrderType(
+                        vendorId, today, OrderType.MANUAL);
+
+        List<OrderResponseDTO> manualOrders =
+                orderRepository
+                        .findByVendor_IdAndOrderDateAndOrderType(
+                                vendorId, today, OrderType.MANUAL)
+                        .stream()
+                        .map(OrderMapper::toResponse)
+                        .toList();
+
+        List<OrderResponseDTO> autoOrders =
+                orderRepository
+                        .findByVendor_IdAndOrderDateAndOrderType(
+                                vendorId, today, OrderType.AUTO)
+                        .stream()
+                        .map(OrderMapper::toResponse)
+                        .toList();
+
+        return VendorTodayOrderSummaryDTO.builder()
+                .breakfastOrders(breakfastCount)
+                .lunchOrders(lunchCount)
+                .dinnerOrders(dinnerCount)
+                .totalManualOrders(manualCount)
+                .manualOrders(manualOrders)
+                .autoOrders(autoOrders)
+                .build();
+    }
+
+
+
 }

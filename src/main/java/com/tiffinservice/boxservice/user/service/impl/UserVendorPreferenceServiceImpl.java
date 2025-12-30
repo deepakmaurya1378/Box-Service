@@ -16,6 +16,7 @@ import com.tiffinservice.boxservice.user.mapper.UserVendorPreferenceMapper;
 import com.tiffinservice.boxservice.user.repository.AddressRepository;
 import com.tiffinservice.boxservice.user.repository.UserVendorPreferenceRepository;
 import com.tiffinservice.boxservice.vendor.entity.Vendor;
+import com.tiffinservice.boxservice.vendor.repository.VendorRepository;
 import com.tiffinservice.boxservice.user.service.UserVendorPreferenceService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -30,47 +31,52 @@ public class UserVendorPreferenceServiceImpl implements UserVendorPreferenceServ
 
     private final UserVendorPreferenceRepository repo;
     private final AddressRepository addressRepository;
+    private final VendorRepository vendorRepository;
 
     @Override
-    public UserVendorPreferenceResponseDTO addVendorPreference(
-            UserVendorPreferenceRequestDTO req
-    ) {
+    public UserVendorPreferenceResponseDTO addVendorPreference(UserVendorPreferenceRequestDTO req) {
 
-        int count = repo.countByUserIdAndShiftType(
-                req.getUserId(),
-                req.getShiftType()
-        );
+        int count = repo.countByUserIdAndShiftType(req.getUserId(), req.getShiftType());
 
         if (count >= 5) {
-            throw new ConflictException(
-                    "You already have 5 preferred vendors for " + req.getShiftType()
-            );
+            throw new ConflictException("You already have 5 preferred vendors for " + req.getShiftType());
         }
 
-        if (req.getPreferenceType() == PreferenceType.DEFAULT || req.getPreferenceType() == PreferenceType.PREFERRED ) {
+        if (req.getPreferenceType() == PreferenceType.DEFAULT || req.getPreferenceType() == PreferenceType.PREFERRED) {
 
-            Address address = addressRepository.findByUser_IdAndAddressType(req.getUserId(), AddressType.valueOf(req.getShiftType().name())).orElseThrow(() ->
-                            new BadRequestException(
-                                    "Please add address for " + req.getShiftType() +
-                                            " before setting Prefered vendor"
-                            )
-                    );
+            Address address = addressRepository.findByUser_IdAndAddressType(req.getUserId(), mapShiftToAddressType(req.getShiftType()))
+                            .orElseThrow(() ->
+                                    new BadRequestException("Please add address for " + req.getShiftType() + " before setting preferred vendor")
+                            );
 
-            Vendor vendor = Vendor.builder().id(req.getVendorId()).build();
+            Vendor vendor = vendorRepository.findById(req.getVendorId())
+                            .orElseThrow(() -> new ResourceNotFoundException("Vendor", "id", req.getVendorId()));
 
-            double distanceKm = GeoUtils.distanceKm(address.getLatitude().doubleValue(), address.getLongitude().doubleValue(), vendor.getLatitude().doubleValue(), vendor.getLongitude().doubleValue());
+            double distanceKm = GeoUtils.distanceKm(
+                    address.getLatitude().doubleValue(),
+                    address.getLongitude().doubleValue(),
+                    vendor.getLatitude().doubleValue(),
+                    vendor.getLongitude().doubleValue()
+            );
 
             if (BigDecimal.valueOf(distanceKm).compareTo(vendor.getDeliveryRadiusKm()) > 0) {
-
-                throw new BadRequestException(
-                        "Vendor cannot deliver to your " + req.getShiftType() + " address");
+                throw new BadRequestException("Vendor cannot deliver to your " + req.getShiftType() + " address");
             }
 
-            boolean defaultExists =
-                    repo.existsByUserIdAndShiftTypeAndPreferenceType(req.getUserId(), req.getShiftType(), PreferenceType.DEFAULT);
+            if (req.getPreferenceType() == PreferenceType.DEFAULT) {
 
-            if (defaultExists) {
-                throw new ConflictException( "Default vendor already exists for " + req.getShiftType());
+                boolean defaultExists =
+                        repo.existsByUserIdAndShiftTypeAndPreferenceType(
+                                req.getUserId(),
+                                req.getShiftType(),
+                                PreferenceType.DEFAULT
+                        );
+
+                if (defaultExists) {
+                    throw new ConflictException(
+                            "Default vendor already exists for " + req.getShiftType()
+                    );
+                }
             }
         }
 
@@ -86,19 +92,27 @@ public class UserVendorPreferenceServiceImpl implements UserVendorPreferenceServ
 
     @Override
     public List<UserVendorPreferenceResponseDTO> getPreferencesByShift(Long userId, ShiftType shiftType) {
+
         List<UserVendorPreference> list = repo.findByUserIdAndShiftType(userId, shiftType);
-        if (list.isEmpty()) { throw new ResourceNotFoundException("No vendors found for " + shiftType + " shift."); }
-        return list.stream().map(UserVendorPreferenceMapper::toDTO).collect(Collectors.toList());
+
+        if (list.isEmpty()) {  throw new ResourceNotFoundException("No vendors found for " + shiftType + " shift.");}
+
+        return list.stream()
+                .map(UserVendorPreferenceMapper::toDTO)
+                .collect(Collectors.toList());
     }
 
     @Override
     public void removeVendorPreference(Long userId, Long vendorId, ShiftType shiftType) {
         UserVendorPreference pref = repo.findByUserIdAndVendorIdAndShiftType(userId, vendorId, shiftType)
-                .orElseThrow(() -> new ResourceNotFoundException( "This vendor is not present in your " + shiftType + " preference list."));
-
+                        .orElseThrow(() -> new ResourceNotFoundException(
+                                        "This vendor is not present in your " + shiftType + " preference list."));
         if (pref.getPreferenceType() == PreferenceType.DEFAULT) {
-            throw new BadRequestException("You cannot remove your default vendor for " + shiftType);
+            throw new BadRequestException(
+                    "You cannot remove your default vendor for " + shiftType
+            );
         }
+
         repo.delete(pref);
     }
 
@@ -106,9 +120,12 @@ public class UserVendorPreferenceServiceImpl implements UserVendorPreferenceServ
     public UserVendorPreferenceResponseDTO changeDefaultVendor(Long userId, Long vendorId, ShiftType shiftType) {
 
         List<UserVendorPreference> list = repo.findByUserIdAndShiftType(userId, shiftType);
-        boolean exists =  list.stream().anyMatch(x -> x.getVendor().getId().equals(vendorId));
 
-        if (!exists) { throw new ResourceNotFoundException( "Vendor does not exist in your preference list for " + shiftType ); }
+        boolean exists = list.stream().anyMatch(x -> x.getVendor().getId().equals(vendorId));
+
+        if (!exists) {
+            throw new ResourceNotFoundException("Vendor does not exist in your preference list for " + shiftType);
+        }
 
         list.forEach(pref -> {
             if (pref.getPreferenceType() == PreferenceType.DEFAULT) {
@@ -121,7 +138,8 @@ public class UserVendorPreferenceServiceImpl implements UserVendorPreferenceServ
                 list.stream()
                         .filter(x -> x.getVendor().getId().equals(vendorId))
                         .findFirst()
-                        .orElseThrow(() -> new ResourceNotFoundException("Vendor not found"));
+                        .orElseThrow(() ->
+                                new ResourceNotFoundException("Vendor not found in your preference list"));
 
         newDefault.setPreferenceType(PreferenceType.DEFAULT);
         repo.save(newDefault);
@@ -130,13 +148,24 @@ public class UserVendorPreferenceServiceImpl implements UserVendorPreferenceServ
 
     @Override
     public UserVendorPreferenceResponseDTO removeDefaultVendor(Long userId, Long vendorId, ShiftType shiftType) {
-        UserVendorPreference preference =
-                repo.findByUserIdAndVendorIdAndShiftType(userId, vendorId, shiftType).orElseThrow(() ->
-                        new ResourceNotFoundException("Vendor not found in your preference list for " + shiftType));
 
-        if (preference.getPreferenceType() != PreferenceType.DEFAULT) { throw new IllegalStateException("This vendor is not Default."); }
+        UserVendorPreference preference = repo.findByUserIdAndVendorIdAndShiftType(userId, vendorId, shiftType)
+                        .orElseThrow(() -> new ResourceNotFoundException("Vendor not found in your preference list for " + shiftType)
+                        );
+
+        if (preference.getPreferenceType() != PreferenceType.DEFAULT) {
+            throw new BadRequestException("This vendor is not set as default for " + shiftType);}
         preference.setPreferenceType(PreferenceType.PREFERRED);
         repo.save(preference);
+
         return UserVendorPreferenceMapper.toDTO(preference);
+    }
+
+    private AddressType mapShiftToAddressType(ShiftType shiftType) {
+        return switch (shiftType) {
+            case BREAKFAST -> AddressType.BREAKFAST;
+            case LUNCH -> AddressType.LUNCH;
+            case DINNER -> AddressType.DINNER;
+        };
     }
 }

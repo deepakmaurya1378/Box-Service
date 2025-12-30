@@ -35,10 +35,7 @@ public class AutoOrderScheduler {
         for (ShiftType shift : ShiftType.values()) {
 
             List<UserVendorPreference> preferences =
-                    preferenceRepo.findByShiftTypeAndPreferenceType(
-                            shift,
-                            PreferenceType.DEFAULT
-                    );
+                    preferenceRepo.findByShiftTypeAndPreferenceType(shift, PreferenceType.DEFAULT);
 
             for (UserVendorPreference pref : preferences) {
 
@@ -46,8 +43,7 @@ public class AutoOrderScheduler {
 
                 LocalTime mealStartTime = getVendorMealStartTime(vendor, shift);
                 if (mealStartTime == null) {
-                    continue;
-                }
+                    continue; }
 
                 LocalDateTime autoOrderTime = today.atTime(mealStartTime).minusHours(4);
 
@@ -59,12 +55,9 @@ public class AutoOrderScheduler {
         }
     }
 
-
     private boolean isWithinExecutionWindow(LocalDateTime now, LocalDateTime target) {
         return now.isAfter(target.minusMinutes(EXECUTION_WINDOW_MINUTES)) && now.isBefore(target.plusMinutes(EXECUTION_WINDOW_MINUTES));
     }
-
-    
 
     private LocalTime getVendorMealStartTime(Vendor vendor, ShiftType shift) {
         return switch (shift) {

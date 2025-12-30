@@ -13,11 +13,14 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     List<Order> findByUser(User user);
 
-    boolean existsByUser_IdAndOrderDateAndShiftTypeAndOrderType(
-            Long userId,
-            LocalDate orderDate,
-            ShiftType shiftType,
-            OrderType orderType
-    );
+    boolean existsByUser_IdAndOrderDateAndShiftTypeAndOrderType(Long userId, LocalDate orderDate, ShiftType shiftType, OrderType orderType);
+
+    List<Order> findByVendor_IdAndOrderDate(Long vendorId, LocalDate orderDate);
+
+    long countByVendor_IdAndOrderDateAndShiftType(Long vendorId, LocalDate orderDate, ShiftType shiftType);
+
+    long countByVendor_IdAndOrderDateAndOrderType(Long vendorId, LocalDate orderDate, OrderType orderType);
+
+    List<Order> findByVendor_IdAndOrderDateAndOrderType(Long vendorId, LocalDate orderDate, OrderType orderType);
 }
 

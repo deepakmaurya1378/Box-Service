@@ -1,5 +1,9 @@
 package com.tiffinservice.boxservice.order.service.impl;
 
+import com.tiffinservice.boxservice.common.exception.BadRequestException;
+import com.tiffinservice.boxservice.common.exception.ConflictException;
+import com.tiffinservice.boxservice.common.exception.ResourceNotFoundException;
+import com.tiffinservice.boxservice.common.exception.VendorLeaveNotAllowedException;
 import com.tiffinservice.boxservice.order.dto.ManualOrderRequestDTO;
 import com.tiffinservice.boxservice.order.dto.OrderResponseDTO;
 import com.tiffinservice.boxservice.order.entity.Order;
@@ -49,27 +53,39 @@ public class OrderServiceImpl implements OrderService {
     @Transactional
     public OrderResponseDTO createManualOrder(Long userId, ManualOrderRequestDTO dto) {
 
+        User user = userRepo.findById(userId)
+                .orElseThrow(() ->
+                        new ResourceNotFoundException("User", "id", userId)
+                );
 
-        User user = userRepo.findById(userId).orElseThrow(() -> new RuntimeException("User not found"));
+        Vendor vendor = vendorRepo.findById(dto.getVendorId())
+                .orElseThrow(() ->
+                        new ResourceNotFoundException("Vendor", "id", dto.getVendorId())
+                );
 
-        Vendor vendor = vendorRepo.findById(dto.getVendorId()).orElseThrow(() -> new RuntimeException("Vendor not found"));
+        if (!Boolean.TRUE.equals(vendor.getIsOpen())) {
+            throw new ConflictException("Vendor is currently closed. Please try later.");
+        }
+
+        if (vendor.getStatus() != VendorStatus.APPROVED) {
+            throw new ConflictException("Vendor is not approved. Orders are not allowed.");
+        }
 
         if (vendorUnavailabilityService.isVendorUnavailable(vendor.getId(), LocalDate.now())) {
-            throw new RuntimeException("Vendor is not available today. Please choose another vendor.");
+            throw new VendorLeaveNotAllowedException(
+                    "Vendor is not available today. Please choose another vendor."
+            );
         }
 
+        Address address = addressRepo.findById(dto.getAddressId())
+                .orElseThrow(() ->
+                        new ResourceNotFoundException("Address", "id", dto.getAddressId())
+                );
 
-        boolean autoOrderExists =
-                orderRepo.existsByUser_IdAndOrderDateAndShiftTypeAndOrderType(user.getId(), LocalDate.now(), dto.getShiftType(), OrderType.AUTO);
-
-        if (autoOrderExists) {
-            throw new RuntimeException("Auto order already exists for this shift. Manual order is not allowed.");
-        }
-
-        Address address = addressRepo.findById(dto.getAddressId()).orElseThrow(() -> new RuntimeException("Address not found"));
-
-        Wallet wallet = walletRepo.findByUserId(user.getId()).orElseThrow(() -> new RuntimeException("Wallet not found for user"));
-
+        Wallet wallet = walletRepo.findByUserId(user.getId())
+                .orElseThrow(() ->
+                        new ResourceNotFoundException("Wallet", "userId", user.getId())
+                );
 
         Order order = orderRepo.save(
                 Order.builder()
@@ -85,18 +101,16 @@ public class OrderServiceImpl implements OrderService {
 
         BigDecimal totalAmount = BigDecimal.ZERO;
 
-
         for (ManualOrderRequestDTO.Item item : dto.getItems()) {
 
             VendorMenu menu = menuRepo.findById(item.getMenuId())
-                    .orElseThrow(() ->
-                            new RuntimeException("Menu item not found")
-                    );
+                    .orElseThrow(() -> new ResourceNotFoundException("VendorMenu", "id", item.getMenuId()));
 
-            if (!Boolean.TRUE.equals(menu.getIsAvailable())) {
-                throw new RuntimeException(
-                        "Menu item not available: " + menu.getMealTitle()
-                );
+            if (!Boolean.TRUE.equals(menu.getIsAvailable())
+                    || menu.getAvailableQuantity() == null
+                    || menu.getAvailableQuantity() < item.getQuantity()) {
+
+                throw new ConflictException("Meal is not available right now");
             }
 
             BigDecimal itemTotal = menu.getPrice().multiply(BigDecimal.valueOf(item.getQuantity()));
@@ -113,23 +127,25 @@ public class OrderServiceImpl implements OrderService {
                             .itemTotal(itemTotal)
                             .build()
             );
+
+            menu.setAvailableQuantity(menu.getAvailableQuantity() - item.getQuantity());
+
+            if (menu.getAvailableQuantity() == 0) {menu.setIsAvailable(false);}
+
+            menuRepo.save(menu);
         }
 
         debitWallet(wallet, totalAmount, order.getId());
-
         order.setTotalAmount(totalAmount);
         order.setStatus(OrderStatus.CONFIRMED);
         order.setConfirmedAt(LocalDateTime.now());
-
-        Order savedOrder = orderRepo.save(order);
-        return OrderMapper.toResponse(savedOrder);
+        return OrderMapper.toResponse(orderRepo.save(order));
     }
 
     @Override
     public List<OrderResponseDTO> getUserOrders(Long userId) {
-
         User user = userRepo.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", userId));
 
         return orderRepo.findByUser(user)
                 .stream()
@@ -140,14 +156,12 @@ public class OrderServiceImpl implements OrderService {
     private void debitWallet(Wallet wallet, BigDecimal amount, Long orderId) {
 
         if (wallet.getBalance().compareTo(amount) < 0) {
-            throw new RuntimeException("Insufficient wallet balance");
+            throw new BadRequestException("Insufficient wallet balance");
         }
 
         wallet.setBalance(wallet.getBalance().subtract(amount));
         walletRepo.save(wallet);
-
-        walletTxnRepo.save(
-                WalletTransaction.builder()
+        walletTxnRepo.save(WalletTransaction.builder()
                         .wallet(wallet)
                         .amount(amount.negate())
                         .type(WalletTransactionType.DEBIT)
